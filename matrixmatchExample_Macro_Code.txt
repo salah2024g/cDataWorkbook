@@ -1,0 +1,1270 @@
+' ===== the macro matrixmatchExample =====
+
+Sub matrixmatchExample()
+    
+    Dim maxrows As Long
+    maxrows = 5
+    Dim dsIn As cDataSet, dsout As cDataSet
+    Dim cop As Collection, r As Range, coc As Collection
+    Dim cht As Chart
+
+    Set dsIn = New cDataSet
+    Set dsout = New cDataSet
+    
+    ' sort it first
+    Application.Calculation = xlCalculationManual
+    Application.ScreenUpdating = False
+    
+    Worksheets("matrixin").Range("$A:$b").Sort _
+        Key1:=Worksheets("matrixin").Range("A1"), _
+        Key2:=Worksheets("matrixin").Range("b1"), _
+        header:=xlYes
+    
+    With dsIn
+        ' create a dset with input data
+        .populateData wholeSheet("matrixin"), , "matrixin", , , , True, , maxrows
+        ' make collections of customers and products that appear
+        Set cop = .Column("product").uniqueValues(eSortAscending)
+        Set coc = .Column("customer").uniqueValues(eSortNone)
+        ' create the output matrix
+        wholeSheet("matrixout").Cells.ClearContents
+        wholeSheet("tempmatrix").Cells.ClearContents
+        
+    End With
+        'get newly created output matrix into a dataset
+    dsout.populateData creatematchMatrixFormulas(coc, cop, dsIn), _
+            , "matrixout"
+    
+    Set dsIn = Nothing
+    Application.ScreenUpdating = True
+    Application.Calculate
+    Application.Calculation = xlCalculationAutomatic
+    ' create heatmap
+    'executeHeatMapScale dsout
+    ''Set cht = createSurfaceChart(dsout, "heatmapx")
+'    Set cht = createSurfaceChart(dsout, "heatmap", xlSurfaceTopView)
+    Set cht = Nothing
+    Set dsout = Nothing
+    Set dsIn = Nothing
+
+
+End Sub
+
+==================================================================================================================
+
+Function lastCell(inrange As Range) As Range
+    Set lastCell = inrange.Cells(inrange.Rows.Count, inrange.Columns.Count)
+End Function
+===============================================================================================================
+
+Function wholeSheet(wn As String) As Range
+    ' return a range representing the entire used worksheet
+    Dim ws As Worksheet, r As Range
+    Set ws = Sheets(wn)
+    Set r = lastCell(ws.UsedRange)
+    Set wholeSheet = ws.Cells.Resize(r.Row, r.Column)
+    
+End Function
+====================================================================================================================
+
+Private Function creatematchMatrixFormulas(coc As Collection, cop As Collection, _
+                dsIn As cDataSet) As Range
+    Dim r As Range, wr As Range, cc As cCell
+
+    Dim listCustomer As Range
+    Dim listProduct As Range
+    Dim tableentries As Range
+    Dim tableHeadingCustomer As Range
+    Dim tableheadingProduct As Range
+    Dim helperStart As Range
+    Dim helperLength As Range
+    Dim matrix As Range
+    
+    Set wr = firstCell(wholeSheet("tempMatrix").Cells)
+    ' these 2 columns will contain the start row and length of
+    ' list of products used by each customer
+    Set helperStart = wr.Resize(coc.Count, 1).Offset(1, 1)
+    helperStart.Offset(-1).Cells(1, 1).Value = "Start"
+    Set helperLength = helperStart.Offset(, -1)
+    helperLength.Offset(-1).Cells(1, 1).Value = "Length"
+    
+    Set tableHeadingCustomer = helperStart.Offset(, 1)
+    tableHeadingCustomer.Offset(-1).Cells(1, 1).Value = "Customer"
+    Set tableheadingProduct = tableHeadingCustomer.Offset(-1, 1).Resize(1, cop.Count)
+    Set tableentries = tableHeadingCustomer.Offset(, _
+        1).Resize(coc.Count, cop.Count)
+        
+    Set listCustomer = dsIn.Column("customer").Where
+    Set listProduct = dsIn.Column("product").Where
+    
+    Set r = tableHeadingCustomer.Resize(1, 1)
+    For Each cc In coc
+        r.Value = cc.Value
+        Set r = r.Offset(1)
+    Next cc
+    
+    Set r = tableheadingProduct.Resize(1, 1)
+    For Each cc In cop
+        r.Value = cc.Value
+        Set r = r.Offset(, 1)
+    Next cc
+    'START
+    ' the first cell is a little different
+    '=MATCH($C2,MatrixIn!$A$2:$A$100001,0)-1
+    helperStart.Cells(1, 1).Formula = _
+        "=Match(" & list( _
+            SAd(tableHeadingCustomer.Cells(1, 1), helperStart, , True), _
+            SAd(listCustomer, helperStart), 0) & ")-1"
+    '=MATCH($C3,OFFSET(MatrixIn!$A$2,$B2+$A2,0,31,1),0)+$A2+$B2-1
+    With helperStart.Offset(1).Resize(helperStart.Rows.Count - 1)
+        .Cells(1, 1).Formula = _
+        "=Match(" & list( _
+            SAd(tableHeadingCustomer.Cells(2, 1), helperStart, True, True), _
+            "offset(" & list( _
+                    SAd(listCustomer, helperStart, True), _
+                    SAd(helperLength, helperStart, True, True) & "+" & _
+                    SAd(helperStart, helperStart, True, True), _
+                    0, cop.Count + 1, 1) & ")", 0) & ")+" & _
+                    SAd(helperLength, helperStart, True, True) & "+" & _
+                    SAd(helperStart, helperStart, True, True) & "-1"
+                    
+        .FillDown
+    End With
+
+    'LENGTH
+    '=MATCH($C2+1,OFFSET(MatrixIn!$A$2,$B2,0,31,1),)-1
+    helperLength.Cells(1, 1).Formula = _
+        "=Match(" & list( _
+            SAd(tableHeadingCustomer.Cells(1, 1), helperStart, True, True) & "+1", _
+            "offset(" & list( _
+                    SAd(listCustomer, helperStart, True), _
+                    SAd(helperStart, helperStart, True, True), _
+                    0, cop.Count + 1, 1) & ")") & ",)-1"
+    helperLength.FillDown
+    'table body
+    '=--ISNUMBER(MATCH(D$1,OFFSET(MatrixIn!$A$2,$B2,1,$A2,1),0))
+    tableentries.Cells(1, 1).Formula = _
+        "=--isnumber(match(" & list( _
+            SAd(tableheadingProduct, tableentries, True, , True), _
+            "offset(" & list( _
+                SAd(listCustomer, tableentries, True), _
+                SAd(helperStart, tableentries, True, True), _
+                1, SAd(helperLength, tableentries, True, True), 1) & ")", 0 _
+            ) & "))"
+
+    tableentries.Resize(1).FillRight
+    tableentries.FillDown
+    
+    ' the final table
+    Set matrix = firstCell(wholeSheet _
+        ("matrixOut")).Resize(cop.Count, cop.Count).Offset(1, 1)
+    Set r = firstCell(matrix.Offset(-1))
+    r.Offset(, -1).Value = "matrix"
+    For Each cc In cop
+        r.Value = cc.Value
+        Set r = r.Offset(, 1)
+    Next cc
+    Set r = firstCell(matrix.Offset(, -1))
+    For Each cc In cop
+        r.Value = cc.Value
+        Set r = r.Offset(1)
+    Next cc
+    matrix.FormulaArray = _
+     "=MMULT(TRANSPOSE( " & SAd(tableentries) & ")," & _
+            SAd(tableentries) & ")"
+    Set creatematchMatrixFormulas = matrix.Offset(-1, -1).Resize(cop.Count + 1, _
+            cop.Count + 1)
+End Function
+===================================================================================================================
+
+' =====    الكلاسات =====
+' [cCell Class]
+' a data Cell - holds value at time of loading, or can be kept fresh if there might be formula updates
+Option Explicit
+'for more about this
+' http://ramblings.mcpher.com/Home/excelquirks/classeslink/data-manipulation-classes
+'to contact me
+' http://groups.google.com/group/excel-ramblings
+'reuse of code
+' http://ramblings.mcpher.com/Home/excelquirks/codeuse
+Dim pValue As Variant                   ' value of cell when first loaded
+Dim pColumn As Long                     ' column number
+Dim pKeepFresh As Boolean               ' whether or not to update with current cell value when accessed
+Dim pParent As cDataRow                 ' cDataRow to which this belongs
+Public Property Get Row() As Long
+    Row = pParent.Row
+End Property
+Public Property Get Column() As Long
+    Column = pColumn
+End Property
+Public Property Get Parent() As cDataRow
+    Set Parent = pParent
+End Property
+Public Property Get Where() As Range    ' return the range from whence it came
+    If Row = 0 Then
+    ' its a heading
+        Set Where = pParent.Where.Offset(Row, pColumn - 1).Resize(1, 1)
+    Else
+        Set Where = pParent.Where.Offset(, pColumn - 1).Resize(1, 1)
+    End If
+End Property
+Public Property Get Refresh() As Variant ' refresh the current value and return it
+    pValue = Where.Value
+    Refresh = pValue
+End Property
+Public Property Get toString(Optional sFormat As String = vbNullString, _
+        Optional bRespectCellFormatting = False) As String ' Convert to a string, applying a format if supplied
+    Dim s As String
+    If Len(sFormat) > 0 Then
+        toString = Format(Value, sFormat)
+    Else
+        If bRespectCellFormatting Then
+            s = Where.NumberFormat
+            If Len(s) > 0 And s <> "General" Then
+                toString = Format(Value, s)
+            Else
+                toString = CStr(Value)
+            End If
+        Else
+            toString = CStr(Value)
+        End If
+    End If
+End Property
+Public Property Get Value() As Variant   ' return the value, refreshing it if necessary
+    If pKeepFresh Then
+        Value = Refresh
+    Else
+        Value = pValue
+    End If
+End Property
+Public Property Let Value(p As Variant)
+    If pKeepFresh Then
+        Commit = p
+    Else
+        pValue = p
+    End If
+End Property
+Public Function needSwap(cc As cCell, e As eSort) As Boolean
+    ' this can be used from a sorting alogirthm
+    Select Case e
+        Case eSortAscending
+            needSwap = LCase(toString) > LCase(cc.toString)
+            
+        Case eSortDescending
+            needSwap = LCase(toString) < LCase(cc.toString)
+    
+        Case Else
+            needSwap = False
+    End Select
+End Function
+Public Function Commit(Optional p As Variant) As Variant
+    Dim v As Variant
+    If Not IsMissing(p) Then
+        pValue = p
+    End If
+    
+    Where.Value = pValue
+    Commit = Refresh
+
+End Function
+Public Function create(par As cDataRow, colNum As Long, rCell As Range, _
+            Optional keepFresh As Boolean = False, _
+            Optional v As Variant) As cCell        ' Fill the Cell up
+    
+    ' if v is specifed we knw the value without needing to access the sheet
+    If IsMissing(v) Then
+        pValue = rCell.Value
+    Else
+        pValue = v
+    End If
+    pColumn = colNum
+    pKeepFresh = keepFresh
+    Set pParent = par
+    Set create = Me                     ' return for convenience
+End Function
+
+
+
+======================================================================================================
+' [cDataColumn Class]
+
+' a collection of data Cells representing one column of data
+Option Explicit
+'for more about this
+' http://ramblings.mcpher.com/Home/excelquirks/classeslink/data-manipulation-classes
+'to contact me
+' http://groups.google.com/group/excel-ramblings
+'reuse of code
+' http://ramblings.mcpher.com/Home/excelquirks/codeuse
+Private pCollect As Collection                      ' a collection of data Cells - one for every row in this column
+Private pWhere As Range
+Private pParent As cDataSet
+Private pColumn As Long
+Private pTypeofColumn As eTypeofColumn
+Private pHeadingCell As cCell    ' we can use this to find the heading for this column
+Public Enum eTypeofColumn
+    eTCdate
+    eTCnumeric
+    eTCtext
+    eTCmixed
+    eTCboolean
+    eTCunknown
+End Enum
+Public Enum eSort
+    eSortNone
+    eSortAscending
+    eSortDescending
+End Enum
+Public Property Get googleType() As String
+    Select Case pTypeofColumn
+        Case eTCnumeric
+            googleType = "number"
+        Case eTCdate
+            googleType = "date"
+        Case Else
+            googleType = "string"
+            
+    End Select
+End Property
+Public Property Get TypeofColumn() As eTypeofColumn
+    TypeofColumn = pTypeofColumn
+End Property
+Public Property Let TypeofColumn(p As eTypeofColumn)
+    pTypeofColumn = p
+End Property
+Public Property Get Column() As Long
+    Column = pColumn
+End Property
+Public Property Get Rows() As Collection
+    Set Rows = pCollect
+End Property
+Public Property Get Parent() As cDataSet
+    Set Parent = pParent
+End Property
+Public Property Get Where() As Range
+    If Not pWhere Is Nothing Then
+        Set Where = pWhere.Resize(pParent.Rows.Count)
+    End If
+End Property
+Public Property Get Cell(rowId As Variant) As cCell
+    Set Cell = pParent.Cell(rowId, pHeadingCell.Column)
+End Property
+Public Property Get Value(rowId As Variant) As Variant
+    Value = Cell(rowId).Value
+End Property
+Public Function Refresh(Optional rowId As Variant) As Variant
+    Dim dt As cCell
+    If IsMissing(rowId) Then
+        For Each dt In Rows
+            Refresh = dt.Refresh
+        Next dt
+        Refresh = Empty
+    Else
+        Refresh = Cell(rowId).Refresh
+    End If
+
+End Function
+Public Property Get uniqueValues(Optional eSort As eSort = eSortNone) As Collection
+    ' return a collection of unique values for this column
+    Dim cc As cCell
+    Dim vUnique As Collection
+    Set vUnique = New Collection
+    
+    For Each cc In Rows
+        If Exists(vUnique, cc.toString) Is Nothing Then vUnique.add cc, CStr(cc.Value)
+    Next cc
+    If eSort <> eSortNone Then SortColl vUnique, eSort
+
+    Set uniqueValues = vUnique
+End Property
+
+Public Sub Commit(Optional p As Variant, Optional rowId As Variant)
+    Dim dt As cCell, v As Variant
+    
+    If IsMissing(rowId) Then
+        For Each dt In pCollect
+            dt.Commit p
+        Next dt
+    Else
+       Cell(rowId).Commit p
+    End If
+   
+End Sub
+Public Property Get toString(rowNum As Long, Optional sFormat As String = vbNullString) As String
+    toString = Cell(rowNum).toString(sFormat)
+End Property
+Public Function create(dSet As cDataSet, hcell As cCell, ncol As Long) As cDataColumn
+    Dim rCell As Range, dcell As cCell
+    pTypeofColumn = eTCunknown
+    Set pParent = dSet
+    Set pCollect = New Collection
+    pColumn = ncol
+    If Not pParent.Where Is Nothing Then
+        Set pWhere = hcell.Where.Offset(1).Resize(dSet.Where.Rows.Count)
+    End If
+    Set pHeadingCell = hcell
+    Set create = Me
+End Function
+
+Private Function Exists(vCollect As Collection, sid As Variant) As cCell
+    If Not vCollect Is Nothing Then
+        On Error GoTo handle
+        Set Exists = vCollect(sid)
+        Exit Function
+    End If
+handle:
+    Set Exists = Nothing
+End Function
+
+
+
+
+=============================================================================================
+' [cDataRow Class  الإجراء]
+
+' a collection of data Cells representing one row of data
+Option Explicit
+'for more about this
+' http://ramblings.mcpher.com/Home/excelquirks/classeslink/data-manipulation-classes
+'to contact me
+' http://groups.google.com/group/excel-ramblings
+'reuse of code
+' http://ramblings.mcpher.com/Home/excelquirks/codeuse
+Private pCollect As Collection                  ' a collection of data Cells - one for every column in this row
+Private pWhere As Range
+Private pParent As cDataSet
+Private pRow As Long
+Public Property Get Parent() As cDataSet
+    Set Parent = pParent
+End Property
+Public Property Get Row() As Long
+    Row = pRow
+End Property
+Public Property Get Columns() As Collection
+    Set Columns = pCollect
+End Property
+Public Property Get Where() As Range
+    Set Where = pWhere
+End Property
+Public Property Get Cell(sid As Variant, Optional complain As Boolean = False) As cCell
+    Dim c As cCell
+    Set c = Exists(sid)
+    If c Is Nothing And complain Then
+        MsgBox (CStr(sid) & " is not a known column heading")
+    End If
+    Set Cell = c
+
+End Property
+Public Property Get Value(sid As Variant) As Variant
+    Dim cc As cCell
+    Set cc = Cell(sid)
+    If Not cc Is Nothing Then
+        Value = cc.Value
+    End If
+End Property
+Public Function Refresh(Optional sid As Variant) As Variant
+    Dim dt As cCell, v As Variant
+    If IsMissing(sid) Then
+        For Each dt In Columns
+            v = dt.Refresh
+        Next dt
+
+    Else
+        Refresh = Cell(sid).Refresh
+    End If
+End Function
+
+Public Sub Commit(Optional p As Variant, Optional sid As Variant)
+    Dim dt As cCell
+    If IsMissing(sid) Then
+        For Each dt In Columns
+            dt.Commit p
+        Next dt
+    Else
+      Cell(sid).Commit p
+    End If
+   
+End Sub
+Public Property Get toString(sid As Variant, Optional sFormat As String = vbNullString) As String
+    toString = Cell(sid).toString(sFormat)
+End Property
+Public Function create(dSet As cDataSet, rDataRow As Range, nRow As Long, _
+                            Optional keepFresh As Boolean = False) As cDataRow
+    Dim rCell As Range, dcell As cCell, hcell As cCell, hr As cHeadingRow, n As Long
+    Dim r As Range, dc As cDataColumn, v As Variant, vs As Variant
+    Set pCollect = New Collection
+    Set pWhere = rDataRow
+    Set pParent = dSet
+    pRow = nRow
+    n = 0
+    If pRow = 0 Then        ' we are doing a headingrow
+        For Each r In pWhere
+            n = n + 1
+            Set dcell = New cCell
+            With dcell
+                pCollect.add .create(Me, n, r, keepFresh), makekey(CStr(r.Value))
+            End With
+        Next r
+    Else
+        Set hr = pParent.HeadingRow
+        ReDim v(1 To 1, 1 To hr.Headings.Count)
+        v = rDataRow
+        
+        For Each hcell In hr.Headings
+            ' create a cell to hold it in
+            Set rCell = rDataRow.Cells(1, hcell.Column)
+            Set dcell = New cCell
+            ' this is because excel fails to make an array if onl 1 cell.
+            If rDataRow.Columns.Count = 1 Then
+                vs = v
+            Else
+                vs = v(1, hcell.Column)
+            End If
+            dcell.create Me, hcell.Column, rCell, keepFresh, vs
+            pCollect.add dcell
+
+            ' set the type of column
+            Set dc = pParent.Columns(hcell.Column)
+            With dc
+                If Not IsEmpty(rCell) Then
+                    If .TypeofColumn <> eTCmixed Then
+                        If IsDate(rCell.Value) Then
+                            If .TypeofColumn <> eTCdate Then
+                                If .TypeofColumn = eTCunknown Then
+                                    .TypeofColumn = eTCdate
+                                Else
+                                    .TypeofColumn = eTCmixed
+                                End If
+                            End If
+                            
+                        ElseIf IsNumeric(rCell.Value) Then
+                            If .TypeofColumn <> eTCnumeric Then
+                                If .TypeofColumn = eTCunknown Then
+                                    .TypeofColumn = eTCnumeric
+                                Else
+                                    .TypeofColumn = eTCmixed
+                                End If
+                            End If
+                        
+                        Else
+                            If .TypeofColumn <> eTCtext Then
+                                If .TypeofColumn = eTCunknown Then
+                                    .TypeofColumn = eTCtext
+                                Else
+                                    .TypeofColumn = eTCmixed
+                                End If
+                            End If
+                        End If
+                    End If
+                End If
+            End With
+            
+        Next hcell
+    End If
+    Set create = Me
+End Function
+Private Function makekey(s As String) As String
+    makekey = pParent.HeadingRow.makekey(s)
+End Function
+Private Function Exists(sid As Variant) As cCell
+    On Error GoTo handle
+    If VarType(sid) = vbLong Or VarType(sid) = vbInteger Then
+        Set Exists = pCollect(sid)
+    Else
+        Set Exists = pCollect(pParent.Headings(makekey(CStr(sid))).Column)
+    End If
+    Exit Function
+handle:
+    Set Exists = Nothing
+End Function
+
+
+==============================================================================================
+' [cDataSet. Class]
+
+' class cDataSet
+
+Option Explicit
+'for more about this
+' http://ramblings.mcpher.com/Home/excelquirks/classeslink/data-manipulation-classes
+'to contact me
+' http://groups.google.com/group/excel-ramblings
+'reuse of code
+' http://ramblings.mcpher.com/Home/excelquirks/codeuse
+Option Compare Text
+Private pCollect As Collection              ' a collection of data rows  - one for every row in the data
+Private pCollectColumns As Collection       ' a collection of data columns  - one for every column in the data
+Private pWhere As Range
+Private pHeadingRow As cHeadingRow
+Private pName As String
+Private pisLab As Boolean
+Private pParent As cDataSets
+Const cJobName = "cDataSet"
+Public Enum eJsonConv
+    eJsonConvPropertyNames
+End Enum
+Private pKeyColumn As Long
+
+Public Property Get Parent() As cDataSets
+    Set Parent = pParent
+End Property
+Public Property Get Name() As String
+    Name = pName
+End Property
+Public Property Get Rows() As Collection
+    Set Rows = pCollect
+End Property
+Public Property Get Columns() As Collection
+    Set Columns = pCollectColumns
+End Property
+Public Property Get Headings() As Collection
+    Set Headings = pHeadingRow.Headings
+End Property
+Public Property Get Where() As Range
+    Set Where = pWhere
+End Property
+Public Property Get HeadingRow() As cHeadingRow
+    Set HeadingRow = pHeadingRow
+End Property
+Public Property Set HeadingRow(p As cHeadingRow)
+    Set pHeadingRow = p
+End Property
+Public Property Get Cell(rowId As Variant, sid As Variant) As cCell
+    Dim dr As cDataRow
+    Set dr = Row(rowId)
+    If Not dr Is Nothing Then Set Cell = dr.Cell(sid)
+End Property
+Public Property Get isCellTrue(rowId As Variant, sid As Variant) As cCell
+    Dim cc As cCell, s As String
+    Set cc = Cell(rowId, sid)
+    isCellTrue = False
+    If (Not cc Is Nothing) Then
+        Select Case LCase(cc.toString)
+            Case "yes", "y", "1", "true"
+                isCellTrue = True
+
+        End Select
+    End If
+    
+End Property
+Public Property Get Value(rowId As Variant, sid As Variant) As Variant
+    Value = Cell(rowId, sid).Value
+End Property
+Public Function LetValue(p As Variant, rowId As Variant, sid As Variant) As Variant
+    Cell(rowId, sid).Value = p
+End Function
+Public Property Get toString(rowId As Variant, sid As Variant, Optional sFormat As String = vbNullString) As String
+    toString = Cell(rowId, sid).toString(sFormat)
+End Property
+Public Property Get Row(rowId As Variant) As cDataRow
+    If Not pisLab Then
+        If VarType(rowId) <> vbInteger And VarType(rowId) <> vbLong Then
+            MsgBox "Dataset " & pName & " must have labels enabled to use non-numeric labels"
+            Exit Property
+        End If
+    End If
+    Set Row = Exists(rowId)
+End Property
+Public Property Get Column(sid As Variant) As cDataColumn
+    Set Column = pCollectColumns(sid)
+End Property
+Public Property Get ColumnCount() As Long
+    ColumnCount = Headings.Count
+    
+End Property
+Public Property Get RowCount() As Long
+   RowCount = pCollect.Count
+    
+End Property
+Public Property Get jObject(Optional jSonConv As eJsonConv = eJsonConvPropertyNames) As cJobject
+
+    ' convert dataset to a JSON string
+    Dim dr As cDataRow, dh As cCell, dc As cCell, cr As cJobject, ca As cJobject
+    
+    ' create serialization object
+    Dim cj As cJobject
+    Set cj = New cJobject
+
+    ' so far only implemented the property names conversion
+    Debug.Assert jSonConv = eJsonConvPropertyNames
+    cj.init Nothing, pName
+    
+    Set cr = cj.add(cJobName).AddArray
+    For Each dr In Rows
+        With cr.add
+            For Each dc In dr.Columns
+              Set dh = Headings(dc.Column)
+              .add dh.toString, dc.toString
+            Next dc
+        End With
+    Next dr
+    ' return from branch where data starts
+    Set jObject = cj.Child(cJobName)
+    
+End Property
+
+Public Function Refresh(Optional rowId As Variant, Optional sid As Variant) As Variant
+   ' this one can be a single cell refresh or more
+    Dim dr As cDataRow
+    Refresh = Empty
+    If IsMissing(rowId) And IsMissing(sid) Then
+        For Each dr In Rows
+            dr.Refresh
+        Next dr
+    ElseIf IsMissing(rowId) Then
+        Refresh = Column(sid).Refresh
+    ElseIf IsMissing(sid) Then
+        Refresh = Row(rowId).Refresh
+    Else
+        Refresh = Cell(rowId, sid).Refresh
+    End If
+End Function
+Public Sub Commit(Optional p As Variant, Optional rowId As Variant, Optional sid As Variant)
+   ' this one can be a single cell refresh or more
+    Dim dr As cDataRow
+
+    If IsMissing(rowId) And IsMissing(sid) Then
+        For Each dr In Rows
+            dr.Commit p
+        Next dr
+    ElseIf IsMissing(rowId) Then
+         Column(sid).Commit p
+    
+    ElseIf IsMissing(sid) Then
+         Row(rowId).Commit p
+    
+    Else
+        Cell(rowId, sid).Commit p
+    End If
+End Sub
+
+Private Function create(Optional sn As String = vbNullString, Optional blab As Boolean = False, _
+                Optional keepFresh As Boolean = False, Optional stopAtFirstEmptyRow = True, _
+                Optional sKey As String = vbNullString, Optional maxDataRows As Long = 0) As cDataSet
+                
+    Dim rCurrent As Range, dRow As cDataRow, dcol As cDataColumn, hcell As cCell, exitwhile As Boolean
+    Dim topRow As Long, nRow As Long, ncol As Long
+    
+    Set pCollect = New Collection
+    Set rCurrent = pHeadingRow.Where.Offset(1)
+    Set pWhere = rCurrent
+    If sn = vbNullString Then
+        pName = pWhere.Worksheet.Name
+    Else
+        pName = sn
+    End If
+    pName = makekey(pName)
+    pisLab = blab
+    If pisLab Then
+        If sKey = vbNullString Then
+            pKeyColumn = 1
+        Else
+            pKeyColumn = HeadingRow.Exists(sKey).Column
+        End If
+    End If
+    topRow = pWhere.Worksheet.UsedRange.Rows.Count
+    
+    ' create the columns
+    ncol = 0
+    Set pCollectColumns = New Collection
+    For Each hcell In Headings
+        Set dcol = New cDataColumn
+        ncol = ncol + 1
+        dcol.create Me, hcell, ncol
+        pCollectColumns.add dcol, makekey(hcell.Value)
+
+    Next hcell
+    
+    nRow = 0
+    exitwhile = False
+    While rCurrent.Row <= topRow And Not exitwhile
+        If stopAtFirstEmptyRow Then
+            If emptyRow(rCurrent) Then
+                exitwhile = True
+                topRow = rCurrent.Row
+            End If
+        End If
+        If maxDataRows <> 0 And nRow >= maxDataRows Then
+            exitwhile = True
+        End If
+        If Not exitwhile Then
+            Set dRow = New cDataRow
+            nRow = nRow + 1
+            dRow.create Me, rCurrent, nRow, keepFresh
+            If pisLab Then
+                If Exists(dRow.Cell(pKeyColumn).Value) Is Nothing Then
+                    pCollect.add dRow, makekey(dRow.Cell(pKeyColumn).Value)
+                Else
+                    MsgBox ("Could not add duplicate key " + dRow.Cell(pKeyColumn).toString + _
+                        " in data set " + pName + " column " + Headings(pKeyColumn).toString)
+                End If
+            Else
+                pCollect.add dRow
+            End If
+            
+            For Each dcol In pCollectColumns
+                dcol.Rows.add dRow.Cell(dcol.Column)
+            Next dcol
+            
+            Set rCurrent = rCurrent.Offset(1)
+        End If
+    Wend
+    If pHeadingRow.Where.Row < topRow Then
+        If rCurrent.Row - pWhere.Row > 0 Then
+            Set pWhere = pWhere.Resize(rCurrent.Row - pWhere.Row)
+
+        Else
+            Set pWhere = Nothing
+        End If
+    Else
+        Set pWhere = Nothing
+    End If
+
+
+    
+    Set create = Me
+End Function
+Private Function emptyRow(rin As Range) As Boolean
+    Dim r As Range
+    emptyRow = False
+    For Each r In rin.Columns
+        If Not IsEmpty(r.Value) Then
+            Exit Function
+        End If
+    Next r
+    emptyRow = True
+End Function
+Private Function getLikelyColumnRange(Optional ws As Worksheet = Nothing) As Range
+    ' figure out the likely default value for the refedit.
+    Dim rstart As Range, r As Range
+    If ws Is Nothing Then
+        Set rstart = ActiveSheet.Cells(1, 1)
+    Else
+        Set rstart = ws.Cells(1, 1)
+    End If
+    While IsEmpty(rstart) And Not Intersect(rstart, rstart.Worksheet.UsedRange) Is Nothing
+        Set rstart = rstart.Offset(, 1)
+    Wend
+    Set r = rstart
+    While Not IsEmpty(r)
+       Set r = r.Offset(, 1)
+    Wend
+    If r.Column > rstart.Column Then
+        Set getLikelyColumnRange = rstart.Resize(1, r.Column - rstart.Column)
+    Else
+        Set getLikelyColumnRange = rstart
+    End If
+End Function
+Public Function populateJSON(job As cJobject, rstart As Range, _
+        Optional wClearContents As Boolean = True, _
+        Optional stopAtFirstEmptyRow As Boolean = True) As cDataSet
+        
+    Dim joRow As cJobject, joCol As cJobject, rm As Range
+    ' take a json object and apply it to a range
+    
+    If job Is Nothing Then
+        MsgBox "input json object not defined"
+        
+    ElseIf Not job.isArrayRoot Then
+        MsgBox job.key & " must be a rowise array object"
+
+    Else
+    
+        If wClearContents Then
+            rstart.Worksheet.Cells.ClearContents
+        End If
+        
+        For Each joRow In job.Children
+            For Each joCol In joRow.Children
+                With joCol
+                    Set rm = rstart.Cells(joRow.ChildIndex + 1, .ChildIndex)
+                    rm.Value = .Value
+                    rstart.Cells(1, .ChildIndex).Value = .key
+                End With
+            Next joCol
+        Next joRow
+        ' now do a normal populate
+        
+        Set populateJSON = populateData(rstart.Resize(rm.Row - rstart.Row + 1, _
+                rm.Column - rstart.Column + 1), _
+            , , , , , , , , stopAtFirstEmptyRow)
+    
+    End If
+    
+End Function
+Public Function populateGoogleWire(sWire As String, rstart As Range, _
+        Optional wClearContents As Boolean = True, _
+        Optional stopAtFirstEmptyRow As Boolean = True) As cDataSet
+    Dim jo As cJobject, s As String, p As Long, e As Long, joc As cJobject, jc As cJobject, jr As cJobject, cr As cJobject
+    Dim jt As cJobject, v As Variant, astring As Variant, newWire As Boolean
+    Dim jStart As String
+    
+    jStart = "table:"
+    p = InStr(1, sWire, jStart)
+    'there have been multiple versions of wire ...
+    If p = 0 Then
+        'try the other one
+        jStart = q & ("table") & q & ":"
+        p = InStr(1, sWire, jStart)
+        newWire = True
+    End If
+
+
+    ' take a google wire string and apply it to a range
+    p = InStr(1, sWire, jStart)
+    e = Len(sWire) - 1
+
+    If p <= 0 Or e <= 0 Or p > e Then
+        MsgBox " did not find table definition data"
+        Exit Function
+    End If
+    
+    If Mid(sWire, e, 2) <> ");" Then
+        MsgBox ("incomplete google wire message")
+        Exit Function
+    End If
+    ' encode the 'table:' part to a cjobject
+    p = p + Len(jStart)
+    s = "{" & jStart & "[" & Mid(sWire, p, e - p - 1) & "]}"
+    ' google protocol doesnt have quotes round the key of key value pairs,
+    ' and i also need to convert date from javascript syntax new Date()
+    s = rxReplace("(new\sDate)(\()(\d+)(,)(\d+)(,)(\d+)(\))", s, "'$3/$5/$7'")
+    If Not newWire Then s = rxReplace("(\w+)(:)", s, "'$1':")
+    ' this should return an object as follow
+    ' {table:[ cols:[c:[{id:x,label:x,pattern:x,type:x}] , rows:[ c:[(v:x,f:x}] ]}
+    Set jo = New cJobject
+    Set jo = jo.deSerialize(s, eDeserializeGoogleWire)
+    'need to convert that to cdataset:[{label:"x",,,},{},,,]
+    'column labels can be extracted then from jo.child("1.cols.n.label")  .. where 'n'= column number
+
+    Set joc = New cJobject
+    Set cr = joc.init(Nothing, cJobName).AddArray
+    For Each jr In jo.Child("1.rows").Children
+        With cr.add
+            For Each jc In jo.Child("1.cols").Children
+                Set jt = jr.Child("c").Children(jc.ChildIndex)
+                ' sometimes there is no "v" if a null value
+                If Not jt.ChildExists("v") Is Nothing Then
+                    Set jt = jt.Child("v")
+                End If
+                    
+                If jc.Child("type").toString = "date" Then
+                    ' month starts at zero in javascript
+                    astring = Split(jt.toString, "/")
+                    If LBound(astring) <= UBound(astring) Then
+                        If UBound(astring) - LBound(astring) <> 2 Then
+                            Debug.Print jt.fullKey, jt.toString & " should have been a date"
+                            v = jt.Value
+                        Else
+                            v = DateSerial(CInt(astring(0)), CInt(astring(1)) + 1, CInt(astring(2)))
+                        End If
+                    Else
+                       v = Empty
+                    End If
+                Else
+                    v = jt.Value
+                End If
+                ''Debug.Print jc.fullKey, jc.Child("type").toString, _
+                 ''   jc.Child("id").toString, jt.toString, jc.Child("label").toString, v
+                .add jc.Child("label").toString, v
+            Next jc
+        End With
+    Next jr
+    If joc.hasChildren Then
+        If joc.Child(1).hasChildren Then
+            Set populateGoogleWire = populateJSON(joc, rstart, wClearContents, stopAtFirstEmptyRow)
+            Exit Function
+        End If
+    End If
+    MsgBox ("there was no actionable data - check that your google doc types reflect the data in the cells")
+    
+
+End Function
+Public Function rePopulate() As cDataSet
+    ' this repopulates and creates a new cdataset
+    Dim newSet As cDataSet, s As String
+    If pKeyColumn > 0 Then
+     s = HeadingRow.Headings(pKeyColumn)
+    End If
+    Set newSet = New cDataSet
+    ' delete it from parent collection
+    If Not pParent Is Nothing Then
+        pParent.dataSets.Remove (pName)
+    End If
+    ' recreate it with the same parameters as before
+    Set rePopulate = newSet.populateData(firstCell(HeadingRow.Where), , pName, _
+            pisLab, , pParent, True, s)
+End Function
+Public Function populateData(Optional rstart As Range = Nothing, Optional keepFresh As Boolean = False, Optional sn As String = vbNullString, _
+        Optional blab As Boolean = False, Optional blockstarts As Variant, _
+        Optional ps As cDataSets, _
+        Optional bLikely As Boolean = False, _
+        Optional sKey As String = vbNullString, _
+        Optional maxDataRows As Long = 0, _
+        Optional stopAtFirstEmptyRow As Boolean = True) As cDataSet
+    
+    Dim blockName As String, rp As Range, rInput As Range
+    
+    Set pHeadingRow = New cHeadingRow
+    Set pParent = ps
+    If rstart Is Nothing Then
+        Set rInput = getLikelyColumnRange
+    ElseIf bLikely Then
+        Set rInput = getLikelyColumnRange(rstart.Worksheet)
+    Else
+        Set rInput = rstart
+    End If
+    ' this is about taking a block from the range rather than the whole range
+    blockName = makekey(sn)
+    If Not IsMissing(blockstarts) Then
+        Set rp = cleanFind(blockstarts, rInput.Resize(, 1), True, True)
+        If rp Is Nothing Then
+            Exit Function
+        End If
+        If blockName = vbNullString Then
+            blockName = makekey(blockstarts)
+        End If
+        Set rp = toEmptyCol(rp)
+    Else
+        Set rp = rInput.Resize(1)
+    End If
+    
+
+    ' set up headings
+    pHeadingRow.create Me, rp, keepFresh
+    ' create dataset
+    create blockName, blab, keepFresh, stopAtFirstEmptyRow, sKey, maxDataRows
+    Set populateData = Me
+
+End Function
+Private Function makekey(v As Variant) As String
+    makekey = pHeadingRow.makekey(v)
+End Function
+
+Public Function max(Optional bIncludeKey = False, _
+            Optional bExcludeColNo = 0) As cCell
+            
+    Dim cc As cCell, dr As cDataRow, dc As cCell
+    For Each dr In Rows
+        For Each dc In dr.Columns
+            If dc.Column <> pKeyColumn Or bIncludeKey Then
+                If dc.Column <> bExcludeColNo Then
+                    If cc Is Nothing Then
+                        Set cc = dc
+                    ElseIf dc.Value > cc.Value Then
+                        Set cc = dc
+                    End If
+                End If
+            End If
+        Next dc
+    Next dr
+    Set max = cc
+End Function
+Public Function min(Optional bIncludeKey = False, _
+            Optional bExcludeColNo = 0) As cCell
+
+    Dim cc As cCell, dr As cDataRow, dc As cCell
+    For Each dr In Rows
+        For Each dc In dr.Columns
+            If dc.Column <> pKeyColumn Or bIncludeKey Then
+                If dc.Column <> bExcludeColNo Then
+                    If cc Is Nothing Then
+                        Set cc = dc
+                    ElseIf dc.Value < cc.Value Then
+                        Set cc = dc
+                    End If
+                End If
+            End If
+        Next dc
+    Next dr
+    Set min = cc
+End Function
+Public Function bigCommit(Optional rout As Range = Nothing, Optional clearWs As Boolean = False, _
+                    Optional headOrderArray As Variant = Empty, _
+                    Optional filterHead As String = vbNullString, Optional filterValue As Variant = Empty, _
+                    Optional filterApproximate As Boolean = True) As Long
+                    
+    ' this one does a quick bulk commit
+    Dim rTarget As Range, headOrder As Collection, hcell As cCell, nHeads As Long, s As String, j As Long
+    Dim dArray As Variant, dr As cDataRow, n As Long, i As Long, filterCol As Long, fArray As Variant
+    ' get start of where we are putting this to
+    If rout Is Nothing Then
+        Set rTarget = HeadingRow.Where
+    Else
+        Set rTarget = rout
+    End If
+    
+    'possible that we clear the target worksheet frst
+    If clearWs Then rTarget.Worksheet.Cells.ClearContents
+      
+    ' its possible to specify only a subset of columns, or reorder them
+    If IsEmpty(headOrderArray) Then
+    ' all columns are required
+        Set headOrder = Headings
+    Else
+    ' a subset or reordering is required
+        Set headOrder = New Collection
+        For nHeads = LBound(headOrderArray) To UBound(headOrderArray)
+            Set hcell = HeadingRow.Exists(CStr(headOrderArray(nHeads)))
+            If Not hcell Is Nothing Then
+                headOrder.add hcell, HeadingRow.makekey(hcell.Value)
+            Else
+                s = s & headOrderArray(nHeads) & ","
+            End If
+        Next nHeads
+        If Len(s) > 0 Then
+            MsgBox "These fields do not exist " & s
+        End If
+    End If
+    ' is there a filter ?
+    filterCol = 0
+    If filterHead <> vbNullString Then
+        Set hcell = HeadingRow.Exists(filterHead)
+        If hcell Is Nothing Then
+            MsgBox (filterHead & " does not exist to filter on..ignoring")
+        Else
+            filterCol = hcell.Column
+        End If
+    End If
+    ' now create the array
+    If headOrder.Count > 0 Then
+        ReDim dArray(1 To Rows.Count + 1, 1 To headOrder.Count)
+        Set rTarget = rTarget.Resize(pCollect.Count + 1, headOrder.Count)
+        i = 0
+        ' headings
+        For Each hcell In headOrder
+            i = i + 1
+            dArray(1, i) = hcell.Value
+        Next hcell
+        ' data
+        n = 1
+        For Each dr In pCollect
+            If filterOk(dr, filterCol, filterValue, filterApproximate) Then
+                n = n + 1
+                i = 0
+                For Each hcell In headOrder
+                    i = i + 1
+                    dArray(n, i) = dr.Cell(hcell.Column).Value
+                Next hcell
+            End If
+        Next dr
+        If filterCol <> 0 And n <> pCollect.Count + 1 Then
+            Set rTarget = rTarget.Resize(n, headOrder.Count)
+            ReDim fArray(1 To n, 1 To headOrder.Count)
+            For i = 1 To n
+                For j = 1 To headOrder.Count
+                    fArray(i, j) = dArray(i, j)
+                Next j
+            Next i
+            dArray = Empty
+            rTarget = fArray
+        Else
+            rTarget = dArray
+        End If
+    End If
+    bigCommit = n
+    
+End Function
+Private Function filterOk(dr As cDataRow, filterCol As Long, _
+        filterValue As Variant, filterApproximate As Boolean) As Boolean
+    
+    filterOk = True
+    If filterCol <> 0 Then
+        With dr.Cell(filterCol)
+            If filterApproximate Then
+                filterOk = (.Value Like filterValue)
+            Else
+                filterOk = (.Value = filterValue)
+            End If
+        End With
+    End If
+End Function
+Private Function q() As String
+    q = Chr(34)
+End Function
+Private Function Exists(sid As Variant) As cDataRow
+    On Error GoTo handle
+    Set Exists = pCollect(sid)
+    Exit Function
+handle:
+    Set Exists = Nothing
+End Function
+
+=========================================================================================================
+' [cHeadingRow class]
+
+' a collection of Cells that contain the headings associated with a dataset
+Option Explicit
+'for more about this
+' http://ramblings.mcpher.com/Home/excelquirks/classeslink/data-manipulation-classes
+'to contact me
+' http://groups.google.com/group/excel-ramblings
+'reuse of code
+' http://ramblings.mcpher.com/Home/excelquirks/codeuse
+Private pDataRow As cDataRow
+Public Property Get Parent() As cDataSet
+    Set Parent = pDataRow.Parent
+End Property
+Public Property Get Headings() As Collection
+    Set Headings = pDataRow.Columns
+End Property
+Public Property Get Where() As Range
+    Set Where = pDataRow.Where
+End Property
+Public Function create(dSet As cDataSet, rHeading As Range, Optional keepFresh As Boolean = False) As cHeadingRow
+    Dim rCell As Range, hcell As cCell, n As Long, dr As cDataRow
+    Set pDataRow = New cDataRow
+    With pDataRow
+        .create dSet, rHeading, 0, keepFresh
+    End With
+    Set create = Me
+End Function
+Public Function Exists(s As String) As cCell
+    If Headings.Count > 0 Then
+        On Error GoTo handle
+        Set Exists = Headings(makekey(s))
+        Exit Function
+    End If
+handle:
+    Set Exists = Nothing
+End Function
+Public Function makekey(v As Variant) As String
+    makekey = LCase(Trim(CStr(v)))
+End Function
+Public Function Validate(complain As Boolean, ParamArray args() As Variant) As Boolean
+    Dim i As Long, s As String
+    s = ""
+    For i = LBound(args) To UBound(args)
+        If Exists(CStr(args(i))) Is Nothing Then
+            s = s & args(i) & ","
+        End If
+    Next i
+    If Len(s) = 0 Then
+        Validate = True
+    Else
+        s = Left(s, Len(s) - 1)
+        If complain Then
+            MsgBox "The following required columns are missing from dataset " & Parent.Name & ":" & s
+        End If
+    End If
+End Function
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
